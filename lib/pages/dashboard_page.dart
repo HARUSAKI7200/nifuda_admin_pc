@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // ★ 追加: ショートカット用
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart'; // ★ 追加: 設定保存用
 import '../models/project_data.dart';
 import '../widgets/data_view_tab.dart';
 import '../widgets/matching_result_tab.dart';
@@ -26,7 +28,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
   bool _isLoading = false;
   String _currentRootPath = '';
   
-  bool _isReadOnly = false; // ロック制御用フラグ
+  bool _isReadOnly = false;
 
   final List<ProjectData> _undoStack = [];
   final List<ProjectData> _redoStack = [];
@@ -35,6 +37,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // ★ 追加: 起動時に前回のフォルダを自動読み込み
+    _autoLoadLastDirectory();
   }
 
   @override
@@ -48,6 +52,24 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.detached) {
       _releaseCurrentProjectLock();
+    }
+  }
+
+  // ★ 追加: 前回のフォルダパスを読み込んでロードする
+  Future<void> _autoLoadLastDirectory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastPath = prefs.getString('last_project_dir');
+    
+    if (lastPath != null && lastPath.isNotEmpty) {
+      final dir = Directory(lastPath);
+      if (await dir.exists()) {
+        await _loadProjectsFromDirectory(lastPath);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('前回のフォルダを自動読み込みしました')),
+          );
+        }
+      }
     }
   }
 
@@ -71,7 +93,6 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
     bool allowWrite = true;
 
     if (lockInfo != null) {
-      // 自分がロックしている場合はOK、他人なら警告
       if (lockInfo.user != currentUser && mounted) {
         final result = await showDialog<String>(
           context: context,
@@ -187,6 +208,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
       final dir = Directory(directoryPath);
       if (!await dir.exists()) throw Exception('ディレクトリが存在しません');
 
+      // ★ 追加: 読み込み成功したパスを保存
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('last_project_dir', directoryPath);
+
       final List<FileSystemEntity> entities = await dir.list(recursive: true).toList();
       final List<ProjectData> loadedProjects = [];
 
@@ -207,7 +232,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
       for (var proj in loadedProjects) {
         final dateKey = proj.shippingDate != null 
             ? DateFormat('yyyy/MM/dd').format(proj.shippingDate!) 
-            : '未設定';
+            : '出荷日未設定';
         if (!grouped.containsKey(dateKey)) grouped[dateKey] = [];
         grouped[dateKey]!.add(proj);
       }
@@ -366,138 +391,164 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
   Widget build(BuildContext context) {
     final currentUser = ref.watch(userProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('荷札照合データ管理'),
-        backgroundColor: Colors.indigo[700],
-        foregroundColor: Colors.white,
-        actions: [
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: Text('担当: $currentUser', style: const TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ),
-          IconButton(icon: const Icon(Icons.logout), onPressed: _logout, tooltip: 'ログアウト'),
-          const VerticalDivider(width: 20, color: Colors.white24, indent: 10, endIndent: 10),
-          IconButton(icon: const Icon(Icons.undo), onPressed: (!_isReadOnly && _undoStack.isNotEmpty) ? _undo : null),
-          IconButton(icon: const Icon(Icons.redo), onPressed: (!_isReadOnly && _redoStack.isNotEmpty) ? _redo : null),
-          const SizedBox(width: 16),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: (_isLoading || _currentRootPath.isEmpty) ? null : _reloadCurrentFolder,
-            tooltip: 'データを更新',
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: _isLoading ? null : _pickFolderAndLoad,
-            tooltip: 'データフォルダを選択',
-          ),
-          const SizedBox(width: 16),
-        ],
-      ),
-      body: Row(
-        children: [
-          // 左ペイン
-          SizedBox(
-            width: 300,
-            child: Container(
-              color: Colors.grey[100],
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    color: Colors.indigo[50],
-                    width: double.infinity,
-                    child: Text(
-                      _currentRootPath.isEmpty ? 'フォルダ未選択' : '監視中: ${p.basename(_currentRootPath)}',
-                      style: TextStyle(color: Colors.indigo[900], fontSize: 12),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: _isLoading 
-                      ? const Center(child: CircularProgressIndicator())
-                      : _groupedProjects.isEmpty
-                        ? const Center(child: Text('データが見つかりません'))
-                        : ListView.builder(
-                            itemCount: _groupedProjects.length,
-                            itemBuilder: (context, index) {
-                              final dateKey = _groupedProjects.keys.elementAt(index);
-                              final projects = _groupedProjects[dateKey]!;
-                              return ExpansionTile(
-                                title: Text(dateKey, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                initiallyExpanded: index == 0,
-                                shape: const Border(),
-                                children: projects.map((proj) {
-                                  final isSelected = _selectedProject?.filePath == proj.filePath;
-                                  return ListTile(
-                                    title: Text(proj.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                    subtitle: Text(
-                                      'Case: ${proj.currentCaseNumber} / 更新: ${DateFormat('MM/dd HH:mm').format(proj.lastModified)}',
-                                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                                    ),
-                                    selected: isSelected,
-                                    selectedTileColor: Colors.indigo[100],
-                                    onTap: () => _trySelectProject(proj),
-                                  );
-                                }).toList(),
-                              );
-                            },
-                          ),
-                  ),
-                ],
+    // ★ 追加: ショートカットの設定
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
+          if (_selectedProject != null && !_isReadOnly) _overwriteSave();
+        },
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () {
+          if (_undoStack.isNotEmpty && !_isReadOnly) _undo();
+        },
+        // Redo: Ctrl+Y
+        const SingleActivator(LogicalKeyboardKey.keyY, control: true): () {
+          if (_redoStack.isNotEmpty && !_isReadOnly) _redo();
+        },
+        // Redo: Ctrl+Shift+Z
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true): () {
+          if (_redoStack.isNotEmpty && !_isReadOnly) _redo();
+        },
+        // Reload: Ctrl+R
+        const SingleActivator(LogicalKeyboardKey.keyR, control: true): () {
+          if (_currentRootPath.isNotEmpty && !_isLoading) _reloadCurrentFolder();
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('荷札照合データ管理'),
+            backgroundColor: Colors.indigo[700],
+            foregroundColor: Colors.white,
+            actions: [
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  child: Text('担当: $currentUser', style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
               ),
-            ),
+              IconButton(icon: const Icon(Icons.logout), onPressed: _logout, tooltip: 'ログアウト'),
+              const VerticalDivider(width: 20, color: Colors.white24, indent: 10, endIndent: 10),
+              IconButton(icon: const Icon(Icons.undo), onPressed: (!_isReadOnly && _undoStack.isNotEmpty) ? _undo : null, tooltip: '元に戻す (Ctrl+Z)'),
+              IconButton(icon: const Icon(Icons.redo), onPressed: (!_isReadOnly && _redoStack.isNotEmpty) ? _redo : null, tooltip: 'やり直し (Ctrl+Y)'),
+              const SizedBox(width: 16),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: (_isLoading || _currentRootPath.isEmpty) ? null : _reloadCurrentFolder,
+                tooltip: 'データを更新 (Ctrl+R)',
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.folder_open),
+                onPressed: _isLoading ? null : _pickFolderAndLoad,
+                tooltip: 'データフォルダを選択',
+              ),
+              const SizedBox(width: 16),
+            ],
           ),
-          const VerticalDivider(width: 1, thickness: 1),
-          // 右ペイン
-          Expanded(
-            child: _selectedProject == null
-                ? const Center(child: Text('左側のリストからプロジェクトを選択してください', style: TextStyle(color: Colors.grey)))
-                : SelectionArea(
-                    child: Column(
-                      children: [
-                        if (_isReadOnly)
-                          Container(
-                            width: double.infinity,
-                            color: Colors.orange[100],
-                            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
-                            child: Row(
-                              children: const [
-                                Icon(Icons.lock, size: 16, color: Colors.deepOrange),
-                                SizedBox(width: 8),
-                                Text('読み取り専用モード（他ユーザーが作業中）', style: TextStyle(color: Colors.deepOrange, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ),
-                        _buildActionHeader(),
-                        _buildProjectInfoFooter(_selectedProject!),
-                        const Divider(height: 1),
-                        Expanded(child: _ProjectDetailView(
-                          project: _selectedProject!,
-                          onNifudaChanged: (newRows) {
-                            if (_isReadOnly) return;
-                            final newProject = _selectedProject!.copyWith(
-                              nifudaDataRaw: [_selectedProject!.nifudaHeader, ...newRows],
-                            );
-                            _updateProjectState(newProject);
-                          },
-                          onProductChanged: (newRows) {
-                            if (_isReadOnly) return;
-                            final newProject = _selectedProject!.copyWith(
-                              productListDataRaw: [_selectedProject!.productHeader, ...newRows],
-                            );
-                            _updateProjectState(newProject);
-                          },
-                        )),
-                      ],
-                    ),
+          body: Row(
+            children: [
+              // 左ペイン
+              SizedBox(
+                width: 300,
+                child: Container(
+                  color: Colors.grey[100],
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        color: Colors.indigo[50],
+                        width: double.infinity,
+                        child: Text(
+                          _currentRootPath.isEmpty ? 'フォルダ未選択' : '監視中: ${p.basename(_currentRootPath)}',
+                          style: TextStyle(color: Colors.indigo[900], fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: _isLoading 
+                          ? const Center(child: CircularProgressIndicator())
+                          : _groupedProjects.isEmpty
+                            ? const Center(child: Text('データが見つかりません'))
+                            : ListView.builder(
+                                itemCount: _groupedProjects.length,
+                                itemBuilder: (context, index) {
+                                  final dateKey = _groupedProjects.keys.elementAt(index);
+                                  final projects = _groupedProjects[dateKey]!;
+                                  return ExpansionTile(
+                                    title: Text(dateKey, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                    initiallyExpanded: index == 0,
+                                    shape: const Border(),
+                                    children: projects.map((proj) {
+                                      final isSelected = _selectedProject?.filePath == proj.filePath;
+                                      return ListTile(
+                                        title: Text(proj.title, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                        subtitle: Text(
+                                          'Case: ${proj.currentCaseNumber} / 更新: ${DateFormat('MM/dd HH:mm').format(proj.lastModified)}',
+                                          style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                                        ),
+                                        selected: isSelected,
+                                        selectedTileColor: Colors.indigo[100],
+                                        onTap: () => _trySelectProject(proj),
+                                      );
+                                    }).toList(),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
                   ),
+                ),
+              ),
+              const VerticalDivider(width: 1, thickness: 1),
+              // 右ペイン
+              Expanded(
+                child: _selectedProject == null
+                    ? const Center(child: Text('左側のリストからプロジェクトを選択してください', style: TextStyle(color: Colors.grey)))
+                    : SelectionArea(
+                        child: Column(
+                          children: [
+                            if (_isReadOnly)
+                              Container(
+                                width: double.infinity,
+                                color: Colors.orange[100],
+                                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+                                child: Row(
+                                  children: const [
+                                    Icon(Icons.lock, size: 16, color: Colors.deepOrange),
+                                    SizedBox(width: 8),
+                                    Text('読み取り専用モード（他ユーザーが作業中）', style: TextStyle(color: Colors.deepOrange, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                            _buildActionHeader(),
+                            _buildProjectInfoFooter(_selectedProject!),
+                            const Divider(height: 1),
+                            Expanded(child: _ProjectDetailView(
+                              project: _selectedProject!,
+                              onNifudaChanged: (newRows) {
+                                if (_isReadOnly) return;
+                                final newProject = _selectedProject!.copyWith(
+                                  nifudaDataRaw: [_selectedProject!.nifudaHeader, ...newRows],
+                                );
+                                _updateProjectState(newProject);
+                              },
+                              onProductChanged: (newRows) {
+                                if (_isReadOnly) return;
+                                final newProject = _selectedProject!.copyWith(
+                                  productListDataRaw: [_selectedProject!.productHeader, ...newRows],
+                                );
+                                _updateProjectState(newProject);
+                              },
+                            )),
+                          ],
+                        ),
+                      ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -556,7 +607,6 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
           ),
           const Spacer(),
           ElevatedButton.icon(
-            // 完了済み または 読み取り専用なら押せない
             onPressed: (isProcessDone || _isReadOnly) ? null : _runPlSmCreation,
             icon: const Icon(Icons.settings_applications),
             label: const Text('P/L, S/M 作成完了'),
@@ -571,7 +621,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
           OutlinedButton.icon(
             onPressed: _isReadOnly ? null : _overwriteSave,
             icon: const Icon(Icons.save),
-            label: const Text('上書き保存'),
+            label: const Text('上書き保存 (Ctrl+S)'),
           ),
           const SizedBox(width: 12),
           OutlinedButton.icon(
