@@ -1,0 +1,50 @@
+name: nifuda_admin_pc
+description: A new Flutter project for Nifuda Admin on Windows.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # UI & Utilities
+  cupertino_icons: ^1.0.8
+  file_picker: ^10.3.7      # フォルダ選択用
+  intl: ^0.20.2            # 日付フォーマット
+  path: ^1.9.1             # パス操作
+  excel: ^4.0.6            # Excel出力用
+  shared_preferences: ^2.5.3  # ログイン情報保存用
+  
+  # State Management
+  flutter_riverpod: ^3.0.3
+  riverpod_annotation: ^3.0.3
+  
+  flutter_launcher_icons: ^0.13.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  riverpod_generator: ^3.0.3
+  build_runner: ^2.4.9
+
+flutter:
+  uses-material-design: true
+  # 日本語フォント対応（必要に応じてassetsに追加してください）
+  fonts:
+    - family: NotoSerifJP
+      fonts:
+        - asset: fonts/NotoSerifJP-Regular.ttf
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/pc_icon.png"
+  windows:
+    generate: true
+    icon_size: 48 # Windowsアイコンのサイズ指定（任意）

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'pages/dashboard_page.dart';
+import 'pages/login_page.dart';
 
 void main() {
   runApp(const ProviderScope(child: MyApp()));
@@ -18,7 +18,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
-        fontFamily: 'Yu Gothic UI', // Windows向けの標準的なフォント
+        fontFamily: 'Yu Gothic UI',
       ),
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
@@ -28,7 +28,7 @@ class MyApp extends StatelessWidget {
       supportedLocales: const [
         Locale('ja', 'JP'),
       ],
-      home: const DashboardPage(),
+      home: const LoginPage(),
     );
   }
 }

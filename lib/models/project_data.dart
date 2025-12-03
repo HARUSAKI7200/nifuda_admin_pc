@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:path/path.dart' as p;
 
 class ProjectData {
   final String title;
@@ -8,8 +7,14 @@ class ProjectData {
   final String currentCaseNumber;
   final DateTime lastModified;
   final String filePath;
+  final String status;
+  final DateTime? shippingDate;
   
-  // 生のリストデータ (ヘッダー含む)
+  // 担当者情報
+  final String? lastUpdatedBy;
+  final String? plCreatedBy;
+  final DateTime? plCreatedAt;
+
   final List<List<String>> nifudaDataRaw;
   final List<List<String>> productListDataRaw;
 
@@ -19,16 +24,19 @@ class ProjectData {
     required this.currentCaseNumber,
     required this.lastModified,
     required this.filePath,
+    required this.status,
+    this.shippingDate,
+    this.lastUpdatedBy,
+    this.plCreatedBy,
+    this.plCreatedAt,
     required this.nifudaDataRaw,
     required this.productListDataRaw,
   });
 
-  /// JSONファイルからインスタンスを生成
   static Future<ProjectData> fromFile(File file) async {
     final content = await file.readAsString();
     final Map<String, dynamic> json = jsonDecode(content);
 
-    // データのキャスト処理
     List<List<String>> convertToList(dynamic list) {
       if (list is List) {
         return list.map((row) {
@@ -44,6 +52,22 @@ class ProjectData {
     final nifuda = convertToList(json['nifudaData']);
     final product = convertToList(json['productListKariData']);
     final modified = await file.lastModified();
+    
+    final status = json['status']?.toString() ?? '現場検品完了';
+
+    DateTime? shippingDate;
+    if (json['shippingDate'] != null) {
+      try {
+        shippingDate = DateTime.parse(json['shippingDate']);
+      } catch (e) {}
+    }
+
+    DateTime? plCreatedAt;
+    if (json['plCreatedAt'] != null) {
+      try {
+        plCreatedAt = DateTime.parse(json['plCreatedAt']);
+      } catch (e) {}
+    }
 
     return ProjectData(
       title: json['projectTitle']?.toString() ?? '名称未設定',
@@ -51,33 +75,67 @@ class ProjectData {
       currentCaseNumber: json['currentCaseNumber']?.toString() ?? '#1',
       lastModified: modified,
       filePath: file.path,
+      status: status,
+      shippingDate: shippingDate,
+      lastUpdatedBy: json['lastUpdatedBy']?.toString(),
+      plCreatedBy: json['plCreatedBy']?.toString(),
+      plCreatedAt: plCreatedAt,
       nifudaDataRaw: nifuda,
       productListDataRaw: product,
     );
   }
 
-  // --- ヘルパーメソッド ---
+  Map<String, dynamic> toJson() {
+    return {
+      'projectTitle': title,
+      'projectFolderPath': projectFolderPath,
+      'currentCaseNumber': currentCaseNumber,
+      'status': status,
+      'shippingDate': shippingDate?.toIso8601String(),
+      'lastUpdatedBy': lastUpdatedBy,
+      'plCreatedBy': plCreatedBy,
+      'plCreatedAt': plCreatedAt?.toIso8601String(),
+      'nifudaData': nifudaDataRaw,
+      'productListKariData': productListDataRaw,
+    };
+  }
 
-  // 荷札データのヘッダー
+  ProjectData copyWith({
+    String? status, 
+    String? filePath,
+    DateTime? shippingDate,
+    String? lastUpdatedBy,
+    String? plCreatedBy,
+    DateTime? plCreatedAt,
+    List<List<String>>? nifudaDataRaw,
+    List<List<String>>? productListDataRaw,
+  }) {
+    return ProjectData(
+      title: title,
+      projectFolderPath: projectFolderPath,
+      currentCaseNumber: currentCaseNumber,
+      lastModified: DateTime.now(),
+      filePath: filePath ?? this.filePath,
+      status: status ?? this.status,
+      shippingDate: shippingDate ?? this.shippingDate,
+      lastUpdatedBy: lastUpdatedBy ?? this.lastUpdatedBy,
+      plCreatedBy: plCreatedBy ?? this.plCreatedBy,
+      plCreatedAt: plCreatedAt ?? this.plCreatedAt,
+      nifudaDataRaw: nifudaDataRaw ?? List.from(this.nifudaDataRaw.map((e) => List<String>.from(e))),
+      productListDataRaw: productListDataRaw ?? List.from(this.productListDataRaw.map((e) => List<String>.from(e))),
+    );
+  }
+
+  // --- Helpers ---
   List<String> get nifudaHeader => nifudaDataRaw.isNotEmpty ? nifudaDataRaw.first : [];
-  
-  // 荷札データの中身（ヘッダー除く）
   List<List<String>> get nifudaRows => nifudaDataRaw.length > 1 ? nifudaDataRaw.sublist(1) : [];
-
-  // 製品リストのヘッダー
   List<String> get productHeader => productListDataRaw.isNotEmpty ? productListDataRaw.first : [];
-  
-  // 製品リストの中身（ヘッダー除く）
   List<List<String>> get productRows => productListDataRaw.length > 1 ? productListDataRaw.sublist(1) : [];
 
-  // 照合用：荷札データをMapのリストに変換 (Case Noでフィルタリング)
   List<Map<String, String>> getNifudaMapListForMatching(String targetCase) {
     if (nifudaDataRaw.isEmpty) return [];
-    
     final header = nifudaHeader;
-    // ヘッダー内の 'Case No.' のインデックスを探す
     final caseIndex = header.indexOf('Case No.');
-    
     return nifudaRows.where((row) {
       if (caseIndex >= 0 && caseIndex < row.length) {
         return row[caseIndex] == targetCase;
@@ -92,10 +150,8 @@ class ProjectData {
     }).toList();
   }
 
-  // 照合用：製品リストデータをMapのリストに変換
   List<Map<String, String>> getProductMapListForMatching() {
     if (productListDataRaw.isEmpty) return [];
-    
     final header = productHeader;
     return productRows.map((row) {
       final Map<String, String> map = {};
