@@ -1,5 +1,7 @@
+// lib/models/project_data.dart
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart'; // debugPrint用
 
 class ProjectData {
   final String title;
@@ -15,6 +17,7 @@ class ProjectData {
   final String? plCreatedBy;
   final DateTime? plCreatedAt;
 
+  // 内部的にはフラットなリストとして保持し続ける（既存UIとの互換性のため）
   final List<List<String>> nifudaDataRaw;
   final List<List<String>> productListDataRaw;
 
@@ -33,26 +36,83 @@ class ProjectData {
     required this.productListDataRaw,
   });
 
+  /// ファイルからプロジェクトデータを読み込む
+  /// (新旧両方のJSONフォーマットに対応)
   static Future<ProjectData> fromFile(File file) async {
     final content = await file.readAsString();
     final Map<String, dynamic> json = jsonDecode(content);
 
-    List<List<String>> convertToList(dynamic list) {
-      if (list is List) {
-        return list.map((row) {
-          if (row is List) {
-            return row.map((cell) => cell.toString()).toList();
-          }
-          return <String>[];
-        }).toList();
+    List<List<String>> nifuda = [];
+    List<List<String>> product = [];
+
+    // --- データの復元ロジック ---
+    if (json.containsKey('cases')) {
+      // ★ 新フォーマット (ケースごとに構造化されたデータ)
+      
+      // 1. ヘッダーの復元
+      if (json['nifudaHeader'] != null) {
+        nifuda.add(List<String>.from(json['nifudaHeader']));
+      } else {
+        // ヘッダーがない場合のフォールバック (通常ありえないが念のため)
+        nifuda.add(['製番', '項目番号', '品名', '形式', '個数', '図書番号', '摘要', '手配コード', 'Case No.']);
       }
-      return [];
+
+      if (json['productListHeader'] != null) {
+        product.add(List<String>.from(json['productListHeader']));
+      } else {
+        product.add(['ORDER No.', 'ITEM OF SPARE', '品名記号', '形格', '製品コード番号', '注文数', '記事', '備考', '照合済Case']);
+      }
+
+      // 2. ケースデータの展開 (Case No.順にソートしてリストに追加)
+      final Map<String, dynamic> cases = json['cases'];
+      final sortedKeys = cases.keys.toList()..sort((a, b) {
+        // #1, #2, #10 などを数値順に並べたい場合の簡易ロジック
+        // (単純な文字列比較だと #10 < #2 になるため)
+        final int? numA = int.tryParse(a.replaceAll('#', ''));
+        final int? numB = int.tryParse(b.replaceAll('#', ''));
+        if (numA != null && numB != null) {
+          return numA.compareTo(numB);
+        }
+        return a.compareTo(b);
+      });
+
+      for (var key in sortedKeys) {
+        final caseData = cases[key];
+        if (caseData is Map) {
+          // 荷札データ
+          if (caseData['nifuda'] != null) {
+            for (var row in caseData['nifuda']) {
+              nifuda.add(List<String>.from(row));
+            }
+          }
+          // 製品リストデータ
+          if (caseData['products'] != null) {
+            for (var row in caseData['products']) {
+              product.add(List<String>.from(row));
+            }
+          }
+        }
+      }
+
+    } else {
+      // ★ 旧フォーマット (フラットなリスト)
+      List<List<String>> convertToList(dynamic list) {
+        if (list is List) {
+          return list.map((row) {
+            if (row is List) {
+              return row.map((cell) => cell.toString()).toList();
+            }
+            return <String>[];
+          }).toList();
+        }
+        return [];
+      }
+      nifuda = convertToList(json['nifudaData']);
+      product = convertToList(json['productListKariData']);
     }
 
-    final nifuda = convertToList(json['nifudaData']);
-    final product = convertToList(json['productListKariData']);
+    // --- メタデータの読み込み ---
     final modified = await file.lastModified();
-    
     final status = json['status']?.toString() ?? '現場検品完了';
 
     DateTime? shippingDate;
@@ -85,7 +145,42 @@ class ProjectData {
     );
   }
 
+  /// プロジェクトデータをJSON形式に変換 (新フォーマットで保存)
   Map<String, dynamic> toJson() {
+    // --- データをケースごとにグループ化 ---
+    Map<String, dynamic> casesMap = {};
+
+    // 1. 荷札データのグループ化
+    // (Header: 0行目, Data: 1行目以降)
+    if (nifudaDataRaw.length > 1) {
+      for (int i = 1; i < nifudaDataRaw.length; i++) {
+        final row = nifudaDataRaw[i];
+        // モバイル版の定義に従い、Case No. は index 8 と想定
+        String caseNo = (row.length > 8) ? row[8] : 'Unknown';
+        if (caseNo.isEmpty) caseNo = 'Unknown';
+
+        if (!casesMap.containsKey(caseNo)) {
+          casesMap[caseNo] = {'nifuda': [], 'products': []};
+        }
+        casesMap[caseNo]!['nifuda'].add(row);
+      }
+    }
+
+    // 2. 製品リストデータのグループ化
+    if (productListDataRaw.length > 1) {
+      for (int i = 1; i < productListDataRaw.length; i++) {
+        final row = productListDataRaw[i];
+        // モバイル版の定義に従い、照合済Case は index 8 と想定
+        String matchedCase = (row.length > 8) ? row[8] : '';
+        String groupKey = matchedCase.isNotEmpty ? matchedCase : 'Unmatched';
+
+        if (!casesMap.containsKey(groupKey)) {
+          casesMap[groupKey] = {'nifuda': [], 'products': []};
+        }
+        casesMap[groupKey]!['products'].add(row);
+      }
+    }
+
     return {
       'projectTitle': title,
       'projectFolderPath': projectFolderPath,
@@ -95,8 +190,15 @@ class ProjectData {
       'lastUpdatedBy': lastUpdatedBy,
       'plCreatedBy': plCreatedBy,
       'plCreatedAt': plCreatedAt?.toIso8601String(),
-      'nifudaData': nifudaDataRaw,
-      'productListKariData': productListDataRaw,
+      
+      // 新フォーマット項目
+      'nifudaHeader': nifudaDataRaw.isNotEmpty ? nifudaDataRaw.first : [],
+      'productListHeader': productListDataRaw.isNotEmpty ? productListDataRaw.first : [],
+      'cases': casesMap,
+      
+      // ※旧アプリとの互換性のために旧フィールドも残す場合は以下をコメントイン
+      // 'nifudaData': nifudaDataRaw,
+      // 'productListKariData': productListDataRaw,
     };
   }
 
