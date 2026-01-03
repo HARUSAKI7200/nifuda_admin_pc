@@ -40,6 +40,7 @@ class ProjectData {
     if (nifudaDataRaw.isEmpty) return [];
     
     final header = nifudaHeader;
+    // 「Case No.」という列が何番目にあるかを動的に探す
     final caseIndex = header.indexOf('Case No.');
     
     if (caseIndex == -1) return []; // Case No.列がない場合
@@ -80,11 +81,13 @@ class ProjectData {
 
     // --- データの復元ロジック ---
     if (json.containsKey('cases')) {
-      // ★ 新フォーマット
+      // ★ 新フォーマット（モバイルアプリ V2以降）
       
+      // ヘッダー情報の動的読み込み
       if (json['nifudaHeader'] != null) {
         nifuda.add(List<String>.from(json['nifudaHeader']));
       } else {
+        // フォールバック（万が一ヘッダーがない場合）
         nifuda.add(['製番', '項目番号', '品名', '形式', '個数', '図書番号', '摘要', '手配コード', 'Case No.']);
       }
 
@@ -121,7 +124,7 @@ class ProjectData {
       }
 
     } else {
-      // ★ 旧フォーマット
+      // ★ 旧フォーマット（互換性維持）
       List<List<String>> convertToList(dynamic list) {
         if (list is List) {
           return list.map((row) {
@@ -178,6 +181,7 @@ class ProjectData {
     // 1. 荷札データのグループ化
     if (nifudaDataRaw.length > 1) {
       final header = nifudaDataRaw.first;
+      // Case No.列の位置を動的に特定
       final caseColIndex = header.indexOf('Case No.');
 
       for (int i = 1; i < nifudaDataRaw.length; i++) {
@@ -227,6 +231,7 @@ class ProjectData {
       'lastUpdatedBy': lastUpdatedBy,
       'plCreatedBy': plCreatedBy,
       'plCreatedAt': plCreatedAt?.toIso8601String(),
+      // ヘッダー情報も必ず保存する
       'nifudaHeader': nifudaDataRaw.isNotEmpty ? nifudaDataRaw.first : [],
       'productListHeader': productListDataRaw.isNotEmpty ? productListDataRaw.first : [],
       'cases': casesMap,
@@ -265,10 +270,14 @@ class ProjectData {
   List<String> get productHeader => productListDataRaw.isNotEmpty ? productListDataRaw.first : [];
   List<List<String>> get productRows => productListDataRaw.length > 1 ? productListDataRaw.sublist(1) : [];
 
+  // ★ 安全なマッチング用データ生成メソッド
   List<Map<String, String>> getNifudaMapListForMatching(String targetCase) {
     if (nifudaDataRaw.isEmpty) return [];
+    
     final header = nifudaHeader;
+    // 「Case No.」の位置を動的に特定
     final caseIndex = header.indexOf('Case No.');
+    
     return nifudaRows.where((row) {
       if (caseIndex >= 0 && caseIndex < row.length) {
         return row[caseIndex] == targetCase;
@@ -276,6 +285,7 @@ class ProjectData {
       return false;
     }).map((row) {
       final Map<String, String> map = {};
+      // ヘッダー名に基づいてMapを作成（列がズレてもキー名は正しいものになる）
       for (int i = 0; i < header.length; i++) {
         map[header[i]] = i < row.length ? row[i] : '';
       }
@@ -283,6 +293,7 @@ class ProjectData {
     }).toList();
   }
 
+  // ★ 安全なマッチング用データ生成メソッド（製品リスト版）
   List<Map<String, String>> getProductMapListForMatching() {
     if (productListDataRaw.isEmpty) return [];
     final header = productHeader;

@@ -33,16 +33,18 @@ class _MatchingResultTabState extends State<MatchingResultTab> {
   Future<void> _runMatching() async {
     setState(() => _isLoading = true);
 
-    // バックグラウンドでの実行が望ましいですが、ここではシンプルに実行
-    await Future.delayed(const Duration(milliseconds: 100)); // UI更新用
+    // UI更新用に少し待機
+    await Future.delayed(const Duration(milliseconds: 100)); 
 
+    // ★ 修正箇所: ここでProjectDataに追加した「安全な取得メソッド」を使用する
+    // これにより、列の順番が変わっていても、正しいキー（'製番'など）が入ったMapが渡される
     final nifudaMap = widget.project.getNifudaMapListForMatching(widget.project.currentCaseNumber);
     final productMap = widget.project.getProductMapListForMatching();
 
     final result = await _matcher.match(
       nifudaMap,
       productMap,
-      pattern: 'T社（製番・項目番号）', // 必要に応じてUIから選択可能にする
+      pattern: 'T社（製番・項目番号）', 
       currentCaseNumber: widget.project.currentCaseNumber,
     );
 
@@ -73,7 +75,7 @@ class _MatchingResultTabState extends State<MatchingResultTab> {
       return const Center(child: Text('照合対象データがありません'));
     }
 
-    // 表示用カラム定義（モバイルアプリと合わせる）
+    // 表示用カラム定義（照合結果画面で表示したい項目）
     const displayFields = ['製番', '項目番号', '品名', '形式', '個数', '図書番号', '手配コード', '記事'];
     const displayFieldsMap = {
       '製番': 'ORDER No.',
